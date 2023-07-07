@@ -1,0 +1,339 @@
+---
+title: "Simple Application"
+author: "Marie-Christin Wimmler"
+date: "`r Sys.Date()`"
+output: 
+   bookdown::html_document2:
+      toc: true
+      toc_float: true
+      toc_collapsed: true
+      toc_depth: 4
+      number_sections: true
+      code_folding: hide
+      theme: united
+      highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dunn.test) # post-hoc dunn test
+
+library(data.table) # write results to excel file
+
+library(ggpubr) # ggplot theme_cleveland
+library(kableExtra)
+
+
+theme_set(theme_classic())
+ggplot <- function(...) ggplot2::ggplot(...) + scale_color_brewer(palette="Dark2")
+
+options(dplyr.summarise.inform = FALSE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+
+```
+
+# Data preparation
+
+Simulation was conducted on the high performance cluster of TUD.
+Raw data were processed on the HPC using the `R/getResults.R`
+
+# Results
+## Empirical data
+
+```{r lm.trees}
+load("../data/lm_trees.rda") # lm.trees
+lm.trees = lm.trees %>% 
+    group_by(LOC) %>%
+    mutate(tdens = n() / (30 * 30) * 10000)
+```
+
+```{r fig.cap="Distribution of Avicennia germinans stem diameter within different study plots."}
+dodge <- position_dodge(width = 0.9)
+
+lm.trees %>%
+    filter(Sp == "A") %>% 
+    ggplot(., aes(x = factor(round(Sal, 1)), fill = factor(Sal), y = DBH)) +
+    geom_violin(
+        alpha = 0.25,
+        scale = "width",
+        position = dodge,
+        linewidth = 0.1
+    ) +
+    geom_boxplot(
+        alpha = 1,
+        width = .15,
+        position = dodge,
+        linewidth = 0.3
+    ) +
+    guides(fill = F) +
+    scale_fill_brewer(palette = "Dark2") +
+    labs(y = "Stem diameter (cm)",
+         x = "Plot salinity (ppt)") +
+    theme(legend.position = "bottom") 
+```
+
+
+## pyManga setup
+
+- Kruskal Wallis test to assess statistical Independence of results 
+
+```{r pym.trees}
+load("../data/pym_trees.rda") # pym.trees
+pym.trees = pym.trees %>% 
+  mutate(
+    bg = factor(bg,
+                     labels = c("1 \n(resource limitation)",
+                                "2 \n(+ competition)")),
+         mort = factor(mort,
+                       levels = c("NoGrowth", "RandomGrowth"),
+                       labels = c("1 (mechanistic)",
+                                  "2 (+ growth-dependent)")))
+```
+
+```{r get.cl_df_dunn}
+get.cl_df_dunn = function(dunn_results){
+    dt = dunn_results
+    mylist = strsplit(dt$comparisons, " - ")
+
+    df = data.frame()
+    for (i in 1:length(mylist)){
+        m = (mylist[i][[1]])
+        df = rbind(df,
+                   c(m[1], m[2], dt$P.adjusted[i]))
+    }
+    colnames(df) = c("x", "y", "p")
+    df$p = as.numeric(df$p)
+
+    l = df %>% arrange(x) %>% 
+        mutate(s = ifelse(p < 0.05, "y", "n")) %>% 
+        group_by(s) %>%  
+        mutate(l = letters[1:n()]) 
+    
+    l_s = l %>% 
+        filter(s == "y") %>% 
+        gather(., key, value, x, y) %>% ungroup() %>% 
+        distinct(value) %>% 
+        mutate(l = letters[1:n()]) 
+    
+    
+    l_ns = l %>% 
+        filter(s == "n") %>% 
+        gather(., key, value, x, y) %>% ungroup() %>% 
+        select(value, l)
+    print(paste("No of non-sifnificant pairs", nrow(l %>% 
+        filter(s == "n"))))
+    
+    min_let = length(unique(l_ns$l))
+    
+    l_ns = l_ns %>% 
+        group_by(value) %>% 
+        summarise(clf = paste0(l, collapse = ""))
+    
+    clf = l_s %>% 
+        filter(!value %in% l_ns$value) %>% 
+        distinct(value) %>% 
+        mutate(clf = letters[(min_let+1):(n()+min_let)]) %>% 
+        bind_rows(., l_ns) %>% 
+        rename("modules" = "value")
+    return(clf)
+}
+```
+
+
+```{r results=F}
+
+dt_tdens = get.cl_df_dunn(dunn.test(pym.trees$tdens, pym.trees$modules, "bonferroni", kw = F)) %>% 
+    mutate(key = "tdens")
+dt_age = get.cl_df_dunn(dunn.test(pym.trees$age, pym.trees$modules, "bonferroni", kw = F)) %>% 
+    mutate(key = "age")
+dt_dbh = get.cl_df_dunn(dunn.test(pym.trees$dbh, pym.trees$modules, "bonferroni", kw = F)) %>% 
+    mutate(key = "dbh")
+
+dt_all = bind_rows(dt_tdens,
+                   dt_age,
+                   dt_dbh)
+```
+
+
+```{r}
+# table with factors and summary statistics
+dt <- pym.trees %>%
+    gather(., key, value, tdens, age, dbh) %>%
+    group_by(modules, bg, mort, key) %>%
+    summarise(m_value = mean(value), sd_value = sd(value)) %>%
+    arrange(desc(m_value)) %>%
+    ungroup()
+        
+dt <- left_join(dt, dt_all, by = c("key", "modules")) %>%
+    mutate(
+        key = factor(
+            key,
+            levels = c("tdens", "dbh", "age"),
+            labels = c("Tree density (trees per ha)",
+                                 "Stem diameter (cm)", 
+                                 "Tree age (years)")
+        ))
+```
+
+```{r warning=F, out.width="100%", fig.cap="Results of application example. Comparison of results for each of the four models representing different levels of complexity, i.e. number of processes included. Different letters indicate significant differences in the results (Kruskal-Wallis test)."}
+dodge <- position_dodge(width = 0.9)
+
+pym.trees %>% 
+  gather(., key, value, tdens, age, dbh) %>%
+  mutate(key = factor(key,
+                      levels = c("tdens", "dbh", "age"),
+                      labels = c("Tree density (trees per ha)",
+                                 "Stem diameter (cm)", 
+                                 "Tree age (years)"))) %>%
+  ggplot(., aes(x = bg, fill = mort, y = value)) +
+  geom_violin(alpha = 0.25, scale = "width", position = dodge,
+              aes(col = mort),
+              linewidth = 0.1) +
+  geom_boxplot(alpha = 1, width=.15, position = dodge,
+               linewidth = 0.3) +
+  geom_text(dt,
+            mapping=aes(label = clf, y = m_value + sd_value,
+                        col = mort),
+            vjust = -0.3, position = position_dodge(width = 1.35),
+            show.legend = F) +
+  scale_color_brewer(palette = "Dark2") +
+  scale_fill_brewer(palette = "Dark2") +
+  facet_wrap(~key, scales = "free_y") +
+  labs(fill = "Mortality processes",
+       col = "Mortality processes",
+       x = "Below-ground processes") +
+    theme_bw() +
+    theme_cleveland() +
+      theme(legend.position = "bottom",
+        axis.title.y = element_blank()) 
+```
+
+```{r}
+ggsave("Fig4_violin.jpg",
+       width = 8.5, height = 4.0)
+```
+
+
+## Comparison
+
+```{r}
+all.trees = pym.trees %>% 
+    select(bg, mort, tdens, dbh, age) %>% 
+    bind_rows(., lm.trees %>% 
+                  mutate(bg = factor("Field \ndata"),
+                         mort = "",
+                         dbh = DBH,
+                         age = NA) %>% ungroup() %>% 
+                  select(bg, mort, tdens, dbh, age))
+
+all.trees  %>%
+    gather(., key, value, tdens, dbh, age) %>% 
+    mutate(key = factor(key,
+                  levels = c("tdens", "dbh", "age"),
+                  labels = c("Tree density",
+                             "Stem diameter", 
+                             "Tree age"))) %>%
+    group_by(bg, mort, key) %>%
+    summarise(mean = round(mean(value), 1),
+              min = round(min(value), 1),
+              max = round(max(value), 1),
+              lab = paste(mean, " (", min, "-", max, ")", sep = "")) %>% 
+    select(bg, mort, key, lab) %>% 
+    rename("Below-ground processes" = "bg",
+           "Mortality processes" = "mort") %>% 
+    spread(., key, lab) %>%
+    # fwrite("comp.csv", sep = ",")
+    kbl() %>%
+    kable_styling()
+```
+
+```{r results=F}
+all.trees$modules = paste(all.trees$bg, all.trees$mort, sep = "_")
+dt_tdens = get.cl_df_dunn(dunn.test(all.trees$tdens, all.trees$modules, "bonferroni", kw = F)) %>% 
+    mutate(key = "tdens")
+dt_age = get.cl_df_dunn(dunn.test(all.trees$age, all.trees$modules, "bonferroni", kw = F)) %>% 
+    mutate(key = "age")
+dt_dbh = get.cl_df_dunn(dunn.test(all.trees$dbh, all.trees$modules, "bonferroni", kw = F)) %>% 
+    mutate(key = "dbh")
+
+dt_all = bind_rows(dt_tdens,
+                   dt_age,
+                   dt_dbh)
+```
+
+
+```{r}
+# table with factors and summary statistics
+dt <- all.trees %>%
+    gather(., key, value, tdens, age, dbh) %>%
+    group_by(modules, bg, mort, key) %>%
+    summarise(m_value = mean(value), sd_value = sd(value)) %>%
+    arrange(desc(m_value)) %>%
+    ungroup()
+        
+dt <- left_join(dt, dt_all, by = c("key", "modules")) %>%
+    mutate(
+        key = factor(
+            key,
+            levels = c("tdens", "dbh", "age"),
+            labels = c("Tree density (trees per ha)",
+                                 "Stem diameter (cm)", 
+                                 "Tree age (years)")
+        )) %>%
+    mutate(mort = ifelse(bg == ("Field \ndata"), NA, mort)) %>% 
+        filter(!is.na(clf)) 
+# View(dt)
+```
+
+```{r}
+all.trees %>%
+    mutate(mort = ifelse(bg == ("Field \ndata"), NA, mort)) %>% 
+    gather(., key, value, tdens, dbh, age) %>% 
+    mutate(key = factor(key,
+                      levels = c("tdens", "dbh", "age"),
+                      labels = c("Tree density (trees per ha)",
+                                 "Stem diameter (cm)", 
+                                 "Tree age (years)"))) %>% 
+    filter(!is.na(value)) %>% 
+    ggplot(., aes(x = bg, fill = mort, y = value)) +
+    geom_rect(xmin = 2.75, xmax = 3.25, ymin = -Inf, ymax = Inf,
+              fill = "#d4d4d4", alpha = 0.1) +
+    geom_violin(alpha = 0.25, scale = "width", position = dodge,
+              aes(col = mort),
+              linewidth = 0.1) +
+    geom_boxplot(alpha = 1, width=.15, position = dodge,
+               linewidth = 0.3) +
+    geom_text(dt,
+              mapping=aes(label = clf, y = m_value + sd_value),
+              vjust = -0.3, position = position_dodge(width = 1.35),
+              show.legend = F) +
+    scale_color_brewer(palette = "Dark2", na.translate = F) +
+    scale_fill_brewer(palette = "Dark2",na.translate = F) +
+    facet_wrap(~key, scales = "free") +
+    labs(fill = "Mortality processes",
+       col = "Mortality processes",
+       x = "Below-ground processes") +
+    theme_bw() +
+    theme_cleveland() +
+      theme(legend.position = "bottom",
+        axis.title.y = element_blank()) 
+```
+
+```{r}
+ggsave("Fig4_violin2.jpg",
+       width = 9, height = 4.0)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
