@@ -83,7 +83,7 @@ load("../data/pym_trees.rda") # pym.trees
 pym.trees = pym.trees %>% 
   mutate(
     bg = factor(bg,
-                     labels = c("1 \n(resource limitation)",
+                     labels = c("1 \n(resource\nlimitation)",
                                 "2 \n(+ competition)")),
          mort = factor(mort,
                        levels = c("NoGrowth", "RandomGrowth"),
@@ -209,11 +209,6 @@ pym.trees %>%
         axis.title.y = element_blank()) 
 ```
 
-```{r}
-ggsave("Fig4_violin.jpg",
-       width = 8.5, height = 4.0)
-```
-
 
 ## Comparison
 
@@ -250,11 +245,14 @@ all.trees  %>%
 
 ```{r results=F}
 all.trees$modules = paste(all.trees$bg, all.trees$mort, sep = "_")
-dt_tdens = get.cl_df_dunn(dunn.test(all.trees$tdens, all.trees$modules, "bonferroni", kw = F)) %>% 
+dt_tdens = get.cl_df_dunn(dunn.test(all.trees$tdens, 
+                                    all.trees$modules, "bonferroni", kw = F)) %>% 
     mutate(key = "tdens")
-dt_age = get.cl_df_dunn(dunn.test(all.trees$age, all.trees$modules, "bonferroni", kw = F)) %>% 
+dt_age = get.cl_df_dunn(dunn.test(all.trees$age, 
+                                  all.trees$modules, "bonferroni", kw = F)) %>% 
     mutate(key = "age")
-dt_dbh = get.cl_df_dunn(dunn.test(all.trees$dbh, all.trees$modules, "bonferroni", kw = F)) %>% 
+dt_dbh = get.cl_df_dunn(dunn.test(all.trees$dbh, 
+                                  all.trees$modules, "bonferroni", kw = F)) %>% 
     mutate(key = "dbh")
 
 dt_all = bind_rows(dt_tdens,
@@ -286,7 +284,7 @@ dt <- left_join(dt, dt_all, by = c("key", "modules")) %>%
 # View(dt)
 ```
 
-```{r}
+```{r message=F, warning=F}
 all.trees %>%
     mutate(mort = ifelse(bg == ("Field \ndata"), NA, mort)) %>% 
     gather(., key, value, tdens, dbh, age) %>% 
@@ -316,13 +314,13 @@ all.trees %>%
        x = "Below-ground processes") +
     theme_bw() +
     theme_cleveland() +
-      theme(legend.position = "bottom",
-        axis.title.y = element_blank()) 
+    theme(legend.position = "bottom",
+          axis.title.y = element_blank()) 
 ```
 
 ```{r}
-ggsave("Fig4_violin2.jpg",
-       width = 9, height = 4.0)
+ggsave("Fig4_violin.jpg",
+       width = 8, height = 4.0)
 ```
 
 
